@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Play, Pause, RotateCcw, Settings, Volume2, VolumeX } from "lucide-react";
-import NoSleep from "nosleep.js";
 
 export default function WorkoutTimer() {
   // Hằng số cho localStorage keys
@@ -71,14 +70,12 @@ export default function WorkoutTimer() {
     }
   };
 
-  // Cài đặt timer - load từ localStorage
+  // States cho timer settings - load từ localStorage
   const [settings, setSettings] = useState(loadSettings);
-
-  // Cài đặt bổ sung - load từ localStorage
   const [keepScreenOn, setKeepScreenOn] = useState(() => loadAdditionalSettings().keepScreenOn);
   const [soundEnabled, setSoundEnabled] = useState(() => loadAdditionalSettings().soundEnabled);
 
-  // Trạng thái timer
+  // States cho timer
   const [isRunning, setIsRunning] = useState(false);
   const [currentTime, setCurrentTime] = useState(settings.workTime);
   const [currentPhase, setCurrentPhase] = useState("work"); // 'work', 'rest', hoặc 'roundRest'
@@ -87,46 +84,104 @@ export default function WorkoutTimer() {
   const [isFinished, setIsFinished] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
+  // Refs
   const intervalRef = useRef(null);
-  const noSleepRef = useRef(null);
+  const wakeLockRef = useRef(null);
+  const videoRef = useRef(null);
+  const preventSleepMethodRef = useRef(null);
 
-  // Initialize NoSleep instance
-  useEffect(() => {
+  // Wake Lock API + Fallback methods
+  const enableWakeLock = useCallback(async () => {
+    if (!keepScreenOn) return;
+
     try {
-      noSleepRef.current = new NoSleep();
+      // Method 1: Wake Lock API (modern browsers)
+      if ("wakeLock" in navigator) {
+        wakeLockRef.current = await navigator.wakeLock.request("screen");
+        preventSleepMethodRef.current = "wakeLock";
+        console.log("Wake Lock enabled");
+        return;
+      }
     } catch (error) {
-      console.warn("Failed to initialize NoSleep:", error);
+      console.warn("Wake Lock failed:", error);
     }
 
-    return () => {
-      if (noSleepRef.current && noSleepRef.current.isEnabled) {
-        noSleepRef.current.disable();
+    try {
+      // Method 2: Hidden video with audio (fallback)
+      if (videoRef.current) {
+        const video = videoRef.current;
+        video.muted = true;
+        video.loop = true;
+
+        // Create a minimal video blob
+        const canvas = document.createElement("canvas");
+        canvas.width = 1;
+        canvas.height = 1;
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "black";
+        ctx.fillRect(0, 0, 1, 1);
+
+        const stream = canvas.captureStream(1);
+        video.srcObject = stream;
+        await video.play();
+
+        preventSleepMethodRef.current = "video";
+        console.log("Video fallback enabled");
+        return;
       }
-    };
+    } catch (error) {
+      console.warn("Video fallback failed:", error);
+    }
+
+    // Method 3: Periodic interaction simulation (last resort)
+    try {
+      const interval = setInterval(() => {
+        if (isRunning && keepScreenOn) {
+          // Create a minimal DOM interaction to prevent sleep
+          const tempDiv = document.createElement("div");
+          tempDiv.style.position = "absolute";
+          tempDiv.style.top = "-1px";
+          tempDiv.style.left = "-1px";
+          tempDiv.style.width = "1px";
+          tempDiv.style.height = "1px";
+          tempDiv.style.opacity = "0";
+          document.body.appendChild(tempDiv);
+          setTimeout(() => {
+            if (document.body.contains(tempDiv)) {
+              document.body.removeChild(tempDiv);
+            }
+          }, 10);
+        } else {
+          clearInterval(interval);
+        }
+      }, 30000); // Every 30 seconds
+
+      preventSleepMethodRef.current = "interaction";
+      console.log("Interaction fallback enabled");
+    } catch (error) {
+      console.warn("All wake methods failed:", error);
+    }
+  }, [keepScreenOn, isRunning]);
+
+  const disableWakeLock = useCallback(() => {
+    try {
+      if (wakeLockRef.current) {
+        wakeLockRef.current.release();
+        wakeLockRef.current = null;
+        console.log("Wake Lock disabled");
+      }
+
+      if (videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.srcObject = null;
+        console.log("Video fallback disabled");
+      }
+
+      preventSleepMethodRef.current = null;
+    } catch (error) {
+      console.warn("Error disabling wake lock:", error);
+    }
   }, []);
-
-  // NoSleep management - replaces useNoSleep hook
-  useEffect(() => {
-    if (!noSleepRef.current) return;
-
-    if (isRunning && keepScreenOn) {
-      if (!noSleepRef.current.isEnabled) {
-        try {
-          noSleepRef.current.enable();
-        } catch (error) {
-          console.warn("Failed to enable NoSleep:", error);
-        }
-      }
-    } else {
-      if (noSleepRef.current.isEnabled) {
-        try {
-          noSleepRef.current.disable();
-        } catch (error) {
-          console.warn("Failed to disable NoSleep:", error);
-        }
-      }
-    }
-  }, [isRunning, keepScreenOn]);
 
   // Effect để save settings khi thay đổi
   useEffect(() => {
@@ -137,6 +192,19 @@ export default function WorkoutTimer() {
   useEffect(() => {
     saveAdditionalSettings({ keepScreenOn, soundEnabled });
   }, [keepScreenOn, soundEnabled]);
+
+  // Wake lock management
+  useEffect(() => {
+    if (isRunning && keepScreenOn) {
+      enableWakeLock();
+    } else {
+      disableWakeLock();
+    }
+
+    return () => {
+      disableWakeLock();
+    };
+  }, [isRunning, keepScreenOn, enableWakeLock, disableWakeLock]);
 
   // Speech synthesis function
   const speak = useCallback(
@@ -290,11 +358,9 @@ export default function WorkoutTimer() {
       if ("speechSynthesis" in window) {
         window.speechSynthesis.cancel();
       }
-      if (noSleepRef.current && noSleepRef.current.isEnabled) {
-        noSleepRef.current.disable();
-      }
+      disableWakeLock();
     };
-  }, []);
+  }, [disableWakeLock]);
 
   // Format time thành MM:SS
   const formatTime = (seconds) => {
@@ -327,13 +393,46 @@ export default function WorkoutTimer() {
   const resetToDefaults = () => {
     if (confirm("Bạn có chắc muốn reset về cài đặt mặc định?")) {
       updateSettings(defaultSettings);
-      setKeepScreenOn(defaultAdditionalSettings.keepScreenOn);
-      setSoundEnabled(defaultAdditionalSettings.soundEnabled);
+      updateKeepScreenOn(defaultAdditionalSettings.keepScreenOn);
+      updateSoundEnabled(defaultAdditionalSettings.soundEnabled);
+    }
+  };
+
+  // Get current wake method status
+  const getWakeStatus = () => {
+    if (!keepScreenOn) return "⚪ Tắt";
+    if (!isRunning) return "⚪ Dừng";
+
+    switch (preventSleepMethodRef.current) {
+      case "wakeLock":
+        return "🔒 Wake Lock";
+      case "video":
+        return "📹 Video";
+      case "interaction":
+        return "👆 Interaction";
+      default:
+        return "⚡ Đang kích hoạt...";
     }
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-900 via-purple-900 to-indigo-900 flex items-center justify-center p-4">
+      {/* Hidden video for fallback */}
+      <video
+        ref={videoRef}
+        style={{
+          position: "absolute",
+          top: "-1px",
+          left: "-1px",
+          width: "1px",
+          height: "1px",
+          opacity: 0,
+          pointerEvents: "none",
+        }}
+        muted
+        playsInline
+      />
+
       <div className="bg-white/10 backdrop-blur-md rounded-3xl p-8 shadow-2xl border border-white/20 max-w-md w-full">
         {/* Header */}
         <div className="flex justify-between items-center mb-8">
@@ -435,10 +534,10 @@ export default function WorkoutTimer() {
             {/* Additional Settings */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-white/80 text-sm">
-                  Giữ màn hình sáng{" "}
-                  {isRunning && keepScreenOn && noSleepRef.current?.isEnabled ? "✅" : "⚪"}
-                </span>
+                <div className="text-white/80 text-sm">
+                  <div>Giữ màn hình sáng</div>
+                  <div className="text-xs text-white/60">{getWakeStatus()}</div>
+                </div>
                 <button
                   onClick={() => updateKeepScreenOn(!keepScreenOn)}
                   className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
@@ -491,6 +590,9 @@ export default function WorkoutTimer() {
               <p className="text-white/60 text-xs">
                 💾 Cài đặt được lưu tự động trong localStorage
               </p>
+              <p className="text-white/60 text-xs">
+                💡 Hỗ trợ Wake Lock API, Video fallback, và Interaction fallback
+              </p>
             </div>
           </div>
         )}
@@ -501,21 +603,13 @@ export default function WorkoutTimer() {
             {currentPhase === "roundRest" ? (
               <>
                 Vòng {currentRound}/{settings.rounds} hoàn thành • Nghỉ giữa round
-                {keepScreenOn && (
-                  <span className="ml-2">
-                    {isRunning && keepScreenOn && noSleepRef.current?.isEnabled ? "📱✅" : "📱⚪"}
-                  </span>
-                )}
+                {keepScreenOn && <span className="ml-2">{getWakeStatus()}</span>}
               </>
             ) : (
               <>
                 Vòng {currentRound}/{settings.rounds} • Bài tập {currentExercise}/
                 {settings.exercises}
-                {keepScreenOn && (
-                  <span className="ml-2">
-                    {isRunning && keepScreenOn && noSleepRef.current?.isEnabled ? "📱✅" : "📱⚪"}
-                  </span>
-                )}
+                {keepScreenOn && <span className="ml-2">{getWakeStatus()}</span>}
               </>
             )}
           </div>
