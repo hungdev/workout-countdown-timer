@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Play, Pause, RotateCcw, Settings, Volume2, VolumeX } from "lucide-react";
-import { useNoSleep } from "use-no-sleep";
+import NoSleep from "nosleep.js";
 
 export default function WorkoutTimer() {
   // Hằng số cho localStorage keys
@@ -88,9 +88,45 @@ export default function WorkoutTimer() {
   const [showSettings, setShowSettings] = useState(false);
 
   const intervalRef = useRef(null);
+  const noSleepRef = useRef(null);
 
-  // Sử dụng use-no-sleep hook - chỉ cần truyền boolean
-  useNoSleep(isRunning && keepScreenOn);
+  // Initialize NoSleep instance
+  useEffect(() => {
+    try {
+      noSleepRef.current = new NoSleep();
+    } catch (error) {
+      console.warn("Failed to initialize NoSleep:", error);
+    }
+
+    return () => {
+      if (noSleepRef.current && noSleepRef.current.isEnabled) {
+        noSleepRef.current.disable();
+      }
+    };
+  }, []);
+
+  // NoSleep management - replaces useNoSleep hook
+  useEffect(() => {
+    if (!noSleepRef.current) return;
+
+    if (isRunning && keepScreenOn) {
+      if (!noSleepRef.current.isEnabled) {
+        try {
+          noSleepRef.current.enable();
+        } catch (error) {
+          console.warn("Failed to enable NoSleep:", error);
+        }
+      }
+    } else {
+      if (noSleepRef.current.isEnabled) {
+        try {
+          noSleepRef.current.disable();
+        } catch (error) {
+          console.warn("Failed to disable NoSleep:", error);
+        }
+      }
+    }
+  }, [isRunning, keepScreenOn]);
 
   // Effect để save settings khi thay đổi
   useEffect(() => {
@@ -254,6 +290,9 @@ export default function WorkoutTimer() {
       if ("speechSynthesis" in window) {
         window.speechSynthesis.cancel();
       }
+      if (noSleepRef.current && noSleepRef.current.isEnabled) {
+        noSleepRef.current.disable();
+      }
     };
   }, []);
 
@@ -328,7 +367,9 @@ export default function WorkoutTimer() {
                   <input
                     type="number"
                     value={settings.workTime}
-                    onChange={(e) => updateSettings({ ...settings, workTime: e.target.value })}
+                    onChange={(e) =>
+                      updateSettings({ ...settings, workTime: parseInt(e.target.value) || 1 })
+                    }
                     className="w-full px-3 py-2 bg-white/20 rounded-lg text-white placeholder-white/50 border border-white/30"
                     min="1"
                   />
@@ -338,7 +379,9 @@ export default function WorkoutTimer() {
                   <input
                     type="number"
                     value={settings.restTime}
-                    onChange={(e) => updateSettings({ ...settings, restTime: e.target.value })}
+                    onChange={(e) =>
+                      updateSettings({ ...settings, restTime: parseInt(e.target.value) || 1 })
+                    }
                     className="w-full px-3 py-2 bg-white/20 rounded-lg text-white placeholder-white/50 border border-white/30"
                     min="1"
                   />
@@ -353,7 +396,9 @@ export default function WorkoutTimer() {
                 <input
                   type="number"
                   value={settings.roundRestTime}
-                  onChange={(e) => updateSettings({ ...settings, roundRestTime: e.target.value })}
+                  onChange={(e) =>
+                    updateSettings({ ...settings, roundRestTime: parseInt(e.target.value) || 1 })
+                  }
                   className="w-full px-3 py-2 bg-white/20 rounded-lg text-white placeholder-white/50 border border-white/30"
                   min="1"
                 />
@@ -365,7 +410,9 @@ export default function WorkoutTimer() {
                   <input
                     type="number"
                     value={settings.exercises}
-                    onChange={(e) => updateSettings({ ...settings, exercises: e.target.value })}
+                    onChange={(e) =>
+                      updateSettings({ ...settings, exercises: parseInt(e.target.value) || 1 })
+                    }
                     className="w-full px-3 py-2 bg-white/20 rounded-lg text-white placeholder-white/50 border border-white/30"
                     min="1"
                   />
@@ -375,7 +422,9 @@ export default function WorkoutTimer() {
                   <input
                     type="number"
                     value={settings.rounds}
-                    onChange={(e) => updateSettings({ ...settings, rounds: e.target.value })}
+                    onChange={(e) =>
+                      updateSettings({ ...settings, rounds: parseInt(e.target.value) || 1 })
+                    }
                     className="w-full px-3 py-2 bg-white/20 rounded-lg text-white placeholder-white/50 border border-white/30"
                     min="1"
                   />
@@ -387,7 +436,8 @@ export default function WorkoutTimer() {
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-white/80 text-sm">
-                  Giữ màn hình sáng {isRunning && keepScreenOn ? "✅" : "⚪"}
+                  Giữ màn hình sáng{" "}
+                  {isRunning && keepScreenOn && noSleepRef.current?.isEnabled ? "✅" : "⚪"}
                 </span>
                 <button
                   onClick={() => updateKeepScreenOn(!keepScreenOn)}
@@ -452,7 +502,9 @@ export default function WorkoutTimer() {
               <>
                 Vòng {currentRound}/{settings.rounds} hoàn thành • Nghỉ giữa round
                 {keepScreenOn && (
-                  <span className="ml-2">{isRunning && keepScreenOn ? "📱✅" : "📱⚪"}</span>
+                  <span className="ml-2">
+                    {isRunning && keepScreenOn && noSleepRef.current?.isEnabled ? "📱✅" : "📱⚪"}
+                  </span>
                 )}
               </>
             ) : (
@@ -460,7 +512,9 @@ export default function WorkoutTimer() {
                 Vòng {currentRound}/{settings.rounds} • Bài tập {currentExercise}/
                 {settings.exercises}
                 {keepScreenOn && (
-                  <span className="ml-2">{isRunning && keepScreenOn ? "📱✅" : "📱⚪"}</span>
+                  <span className="ml-2">
+                    {isRunning && keepScreenOn && noSleepRef.current?.isEnabled ? "📱✅" : "📱⚪"}
+                  </span>
                 )}
               </>
             )}
